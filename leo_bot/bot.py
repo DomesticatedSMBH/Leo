@@ -29,12 +29,10 @@ class LeoBot(commands.Bot):
         await self.add_cog(F1ClockCog(self, self.config))
         await self.add_cog(BettingCog(self, self.config))
         await self.add_cog(ModerationCog(self, self.config))
-        guild = discord.Object(id=self.config.guild_id)
-        test_guild = discord.Object(id=self.config.test_guild_id)
-        self.tree.copy_global_to(guild=guild)
-        self.tree.copy_global_to(guild=test_guild)
-        await self.tree.sync(guild=guild)
-        await self.tree.sync(guild=test_guild)
+        # Limit command registration to the configured guilds so that we only
+        # sync once and avoid duplicate registrations.
+        guild_ids = {self.config.guild_id, self.config.test_guild_id}
+        self.tree.guilds = [discord.Object(id=guild_id) for guild_id in guild_ids]
         await self.tree.sync()
 
     async def on_ready(self) -> None:
