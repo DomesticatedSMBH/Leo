@@ -25,23 +25,24 @@ class LeoBot(commands.Bot):
         self._ready_notified = False
 
     async def setup_hook(self) -> None:
+        # Remove any previously registered global commands before loading
+        # the cogs so that we can perform clean per-guild syncs afterwards.
+        self.tree.clear_commands(guild=None)
+        await self.tree.sync(guild=None)
+
         await self.add_cog(ScheduleCog(self, self.config, self.schedule_manager))
         await self.add_cog(F1ClockCog(self, self.config))
         await self.add_cog(BettingCog(self, self.config))
         await self.add_cog(ModerationCog(self, self.config))
-        # Limit command registration to the configured guilds so that we only
-        # sync once and avoid duplicate registrations.
-        guild_ids = {self.config.guild_id, self.config.test_guild_id}
 
-        # Clear any global commands that might remain registered from previous
-        # runs before performing per-guild syncs.
-        self.tree.clear_commands(guild=None)
-        await self.tree.sync(guild=None)
+        guild_ids = {
+            guild_id
+            for guild_id in (self.config.guild_id, self.config.test_guild_id)
+            if guild_id
+        }
 
-        guild_objects = [discord.Object(id=guild_id) for guild_id in guild_ids]
-        self.tree.guilds = guild_objects
-        for guild in guild_objects:
-            await self.tree.sync(guild=guild)
+        for guild_id in guild_ids:
+            await self.tree.sync(guild=discord.Object(id=guild_id))
 
     async def on_ready(self) -> None:
         await self.change_presence(activity=discord.Game("with Charles"))
