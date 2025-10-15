@@ -33,7 +33,6 @@ class BotConfig:
     f1_cache_path: Path = Path(".fastf1cache")
     toto_db_path: Path = Path("toto_f1.sqlite")
     wallet_db_path: Path = Path("wallet.sqlite")
-    toto_requests_only: bool = False
 
 
 def _require_env(name: str) -> str:
@@ -80,14 +79,6 @@ def _parse_optional_int_env(name: str) -> Optional[int]:
         raise RuntimeError(f"Environment variable {name} must be an integer") from exc
 
 
-def _parse_bool_env(name: str, *, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return default
-    normalized = raw.strip().lower()
-    return normalized in {"1", "true", "yes", "on"}
-
-
 def build_config() -> BotConfig:
     """Assemble :class:`BotConfig` from environment variables."""
 
@@ -111,7 +102,6 @@ def build_config() -> BotConfig:
         default_timezone=pytz.utc,
         toto_db_path=Path(os.getenv("TOTO_F1_DB", "toto_f1.sqlite")),
         wallet_db_path=Path(os.getenv("WALLET_DB_PATH", "wallet.sqlite")),
-        toto_requests_only=_parse_bool_env("TOTO_REQUESTS_ONLY", default=False),
     )
     return config
 
