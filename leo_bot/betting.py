@@ -548,7 +548,7 @@ class WalletStore:
                 cursor,
                 user_id,
                 -amount,
-                f"Bet on {outcome_name}",
+                f"Bet on {market_name} #{argument} {outcome_name}",
                 meta={"market_id": market_id, "bet_type": bet_type},
             )
             cursor.execute(
@@ -614,6 +614,7 @@ class OutcomeInfo:
     odds_decimal: float
     implied_probability: float
     canonical_key: str
+    argument: int
 
 
 @dataclass
@@ -627,6 +628,8 @@ class MarketInfo:
     type_tags: set[str]
     outcomes: list[OutcomeInfo]
     group_keys: tuple[str, ...] = field(default_factory=tuple)
+    outcome_map: dict[int, OutcomeInfo] = field(default_factory=dict)
+    instance: Optional[int] = None
 
 
 def normalise_market_type(name: str) -> set[str]:
