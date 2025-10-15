@@ -21,6 +21,7 @@ from ..betting import (
     normalise_market_type,
     refresh_toto,
     run_in_thread,
+    translate_to_english,
     to_cents,
 )
 from ..config import BotConfig
@@ -185,9 +186,17 @@ class BettingCog(commands.Cog):
 
     def _build_market_embed(self, market: MarketInfo) -> discord.Embed:
         color = 0x3D85C6 if not market.is_closed else 0x7F8C8D
-        embed = discord.Embed(title=market.name, color=color)
+        base_title = translate_to_english(market.name) if market.name else market.name
+        if market.instance is not None:
+            if base_title:
+                title = f"#{market.instance} · {base_title}"
+            else:
+                title = f"#{market.instance}"
+        else:
+            title = base_title or "Betting Market"
+        embed = discord.Embed(title=title, color=color)
         if market.event_name:
-            embed.description = market.event_name
+            embed.description = translate_to_english(market.event_name)
         if market.closes_at:
             local = format_local(market.closes_at, self.config.default_timezone)
             embed.add_field(
@@ -195,20 +204,76 @@ class BettingCog(commands.Cog):
                 value=f"{local}\n{countdown(market.closes_at)}",
                 inline=False,
             )
-        outcomes = sorted(market.outcomes, key=lambda o: o.odds_decimal)
-        lines = []
-        for outcome in outcomes[:10]:
-            prob = outcome.implied_probability * 100
-            lines.append(
-                f"**{outcome.selection_name}** — {outcome.odds_decimal:.2f} ({prob:.1f}%)"
-            )
-        if lines:
-            embed.add_field(name="Outcomes", value="\n".join(lines), inline=False)
+        outcomes = sorted(market.outcomes, key=lambda o: o.argument)
+        table_chunks = self._format_outcomes_table(outcomes)
+        if table_chunks:
+            for idx, chunk in enumerate(table_chunks):
+                name = "Outcomes" if idx == 0 else f"Outcomes (cont. {idx})"
+                embed.add_field(name=name, value=chunk, inline=False)
         else:
             embed.add_field(name="Outcomes", value="No odds available", inline=False)
         status = "Closed" if market.is_closed else "Open"
         embed.set_footer(text=f"Status: {status}")
         return embed
+
+    @staticmethod
+    def _wrap_table(lines: list[str]) -> str:
+        return "```\n" + "\n".join(lines) + "\n```"
+
+    def _build_table_chunks(
+        self, header_line: str, divider_line: str, row_lines: list[str]
+    ) -> list[str]:
+        if not row_lines:
+            return []
+
+        base = [header_line, divider_line]
+        chunks: list[str] = []
+        current = base.copy()
+        for row in row_lines:
+            prospective = current + [row]
+            wrapped = self._wrap_table(prospective)
+            if len(wrapped) > 1024 and len(current) > len(base):
+                chunks.append(self._wrap_table(current))
+                current = base.copy()
+                prospective = current + [row]
+                wrapped = self._wrap_table(prospective)
+            if len(wrapped) > 1024:
+                trimmed = row
+                while trimmed and len(self._wrap_table(base + [trimmed])) > 1024:
+                    trimmed = trimmed[:-1]
+                if not trimmed:
+                    trimmed = "…"
+                prospective = base + [trimmed]
+                wrapped = self._wrap_table(prospective)
+            current = prospective
+        if len(current) > len(base):
+            chunks.append(self._wrap_table(current))
+        return chunks
+
+    def _format_outcomes_table(self, outcomes: list[OutcomeInfo]) -> list[str]:
+        if not outcomes:
+            return []
+
+        headers = ("#", "Name", "Odds")
+        rows: list[tuple[str, str, str]] = []
+        for outcome in outcomes:
+            probability = outcome.implied_probability * 100
+            odds_text = f"{outcome.odds_decimal:.2f} ({probability:.1f}%)"
+            name = outcome.selection_name or ""
+            rows.append((str(outcome.argument), name, odds_text))
+
+        widths = [
+            max(len(headers[col]), max(len(row[col]) for row in rows))
+            for col in range(len(headers))
+        ]
+
+        def format_row(row: tuple[str, str, str]) -> str:
+            return " | ".join(cell.ljust(widths[idx]) for idx, cell in enumerate(row))
+
+        header_line = format_row(headers)
+        divider_line = "-+-".join("-" * width for width in widths)
+        row_lines = [format_row(row) for row in rows]
+        return self._build_table_chunks(header_line, divider_line, row_lines)
 
     async def _refresh_market_cache(self, *, force: bool = False) -> list[MarketInfo]:
         now = datetime.now(timezone.utc)
@@ -234,6 +299,8 @@ class BettingCog(commands.Cog):
             markets,
             outcomes_map,
         )
+        for index, info in enumerate(processed):
+            info.instance = index
         self._latest_markets = processed
         self._last_cache_at = now
         return processed
@@ -262,6 +329,8 @@ class BettingCog(commands.Cog):
         for market in markets:
             raw_name = market.name
             event_name, display_name = _split_market_name(raw_name)
+            translated_event = translate_to_english(event_name) if event_name else None
+            translated_display = translate_to_english(display_name)
             session_code = determine_session_code(display_name)
             closes_at = None
             related_event = None
@@ -275,29 +344,49 @@ class BettingCog(commands.Cog):
                 except Exception:
                     closes_at = None
             outcomes = []
-            for outcome in outcomes_map.get(market.id, []):
+            for argument, outcome in enumerate(outcomes_map.get(market.id, [])):
+                translated_outcome = translate_to_english(outcome.selection_name)
                 outcomes.append(
                     OutcomeInfo(
                         market_id=market.id,
-                        selection_name=outcome.selection_name,
+                        selection_name=translated_outcome,
                         odds_decimal=outcome.odds_decimal,
                         implied_probability=outcome.implied_prob,
-                        canonical_key=canonical_key(outcome.selection_name),
+                        canonical_key=canonical_key(translated_outcome),
+                        argument=argument,
                     )
                 )
             if not outcomes:
                 continue
             is_closed = bool(closes_at and closes_at <= now)
+            group_key_sources: set[str] = set()
+            for candidate in filter(None, [event_name, translated_event]):
+                group_key_sources.add(candidate)
+                if candidate.upper().startswith("GP "):
+                    remainder = candidate[3:].strip()
+                    if remainder:
+                        group_key_sources.add(f"{remainder} Grand Prix")
+                        if translated_display:
+                            group_key_sources.add(f"{remainder} Grand Prix {translated_display}")
+            if translated_display:
+                group_key_sources.add(translated_display)
+            group_keys = {
+                key
+                for source in group_key_sources
+                if (key := canonical_key(source))
+            }
             infos.append(
                 MarketInfo(
                     id=market.id,
-                    name=display_name,
-                    event_name=event_name,
+                    name=translated_display,
+                    event_name=translated_event,
                     session_code=session_code,
                     closes_at=closes_at,
                     is_closed=is_closed,
-                    type_tags=normalise_market_type(display_name),
+                    type_tags=normalise_market_type(translated_display),
                     outcomes=outcomes,
+                    group_keys=tuple(sorted(group_keys)),
+                    outcome_map={item.argument: item for item in outcomes},
                 )
             )
 
@@ -307,8 +396,12 @@ class BettingCog(commands.Cog):
         if next_event_keys:
             grouped = defaultdict(list)
             for info in infos:
-                key = canonical_key(info.event_name) if info.event_name else ""
-                grouped[key].append(info)
+                keys = info.group_keys or ()
+                if keys:
+                    for key in keys:
+                        grouped[key].append(info)
+                else:
+                    grouped[""].append(info)
             for event_key in next_event_keys:
                 for candidate_key, items in grouped.items():
                     if event_key and event_key in candidate_key:
@@ -316,10 +409,10 @@ class BettingCog(commands.Cog):
 
         return sorted(infos, key=lambda m: m.closes_at or datetime.max)
 
-    def _find_market_for_type(self, bet_type: str) -> Optional[MarketInfo]:
+    def _find_market_by_instance(self, instance: int) -> Optional[MarketInfo]:
         now = datetime.now(timezone.utc)
         for market in self._latest_markets:
-            if bet_type not in market.type_tags:
+            if market.instance != instance:
                 continue
             if market.closes_at and market.closes_at <= now:
                 continue
@@ -447,32 +540,31 @@ class BettingCog(commands.Cog):
 
     @app_commands.command(name="bet", description="Place a bet using FITs")
     @app_commands.choices(
-        bet_type=[
-            app_commands.Choice(name="Race Winner", value="winner"),
-            app_commands.Choice(name="Top 3", value="top3"),
-            app_commands.Choice(name="Top 6", value="top6"),
-            app_commands.Choice(name="Qualifying", value="qualifying"),
-            app_commands.Choice(name="Sprint", value="sprint"),
+        staking=[
+            app_commands.Choice(name="Split total stake", value="total"),
+            app_commands.Choice(name="Stake per selection", value="each"),
         ]
     )
     @app_commands.describe(
-        bet_type="Type of market to bet on",
-        argument="Driver or selection name",
+        instance="Betting instance number shown in the betting embeds",
+        arguments="Comma separated outcome numbers (e.g. 0, 4, 12)",
+        staking="How to apply the FIT amount across selections",
         amount="Amount of FITs to wager",
     )
     async def bet(
         self,
         interaction: discord.Interaction,
-        bet_type: app_commands.Choice[str],
-        argument: str,
+        instance: int,
+        arguments: str,
+        staking: app_commands.Choice[str],
         amount: app_commands.Range[float, 0.01, 100000.0],
     ) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         await self._refresh_market_cache()
-        market = self._find_market_for_type(bet_type.value)
+        market = self._find_market_by_instance(instance)
         if not market:
             await interaction.followup.send(
-                "No open market found for that bet type right now.", ephemeral=True
+                f"No open market found for instance #{instance}.", ephemeral=True
             )
             return
         if market.closes_at and market.closes_at <= datetime.now(timezone.utc):
@@ -480,46 +572,106 @@ class BettingCog(commands.Cog):
                 "This market is already closed.", ephemeral=True
             )
             return
-        key = canonical_key(argument)
-        outcome = None
-        for candidate in market.outcomes:
-            if candidate.canonical_key == key:
-                outcome = candidate
-                break
-        if outcome is None:
+        tokens = [token.strip() for token in arguments.split(",") if token.strip()]
+        if not tokens:
             await interaction.followup.send(
-                "Selection not found in this market. Check spelling and try again.",
+                "Provide at least one outcome number to bet on.", ephemeral=True
+            )
+            return
+        try:
+            selections = [int(token) for token in tokens]
+        except ValueError:
+            await interaction.followup.send(
+                "Outcome numbers must be integers separated by commas.",
                 ephemeral=True,
             )
             return
-        cents = to_cents(float(amount))
-        try:
-            bet_id = await run_in_thread(
-                self._wallets.create_bet,
-                interaction.user.id,
-                market.id,
-                market.name,
-                outcome.selection_name,
-                bet_type.value,
-                argument,
-                cents,
-                outcome.odds_decimal,
-                market.closes_at,
+        if len(set(selections)) != len(selections):
+            await interaction.followup.send(
+                "Duplicate outcome numbers are not allowed in a single bet.",
+                ephemeral=True,
             )
-        except WalletError as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
             return
-        potential = from_cents(cents) * outcome.odds_decimal
+        missing = [selection for selection in selections if selection not in market.outcome_map]
+        if missing:
+            await interaction.followup.send(
+                "Unknown outcome numbers: " + ", ".join(map(str, missing)),
+                ephemeral=True,
+            )
+            return
+        staking_mode = staking.value
+        staking_label = staking.name
+        selection_count = len(selections)
+        if staking_mode == "each":
+            stake_cents = to_cents(float(amount))
+            if stake_cents <= 0:
+                await interaction.followup.send(
+                    "Stake per selection must be at least 0.01 FITs.", ephemeral=True
+                )
+                return
+            stakes = [stake_cents for _ in selections]
+            total_required = stake_cents * selection_count
+        else:
+            total_cents = to_cents(float(amount))
+            if total_cents < selection_count:
+                await interaction.followup.send(
+                    "Total stake is too small to split across all selections.",
+                    ephemeral=True,
+                )
+                return
+            base = total_cents // selection_count
+            remainder = total_cents % selection_count
+            stakes = [base + (1 if idx < remainder else 0) for idx in range(selection_count)]
+            total_required = sum(stakes)
+        balance = await run_in_thread(self._wallets.get_balance, interaction.user.id)
+        if balance < total_required:
+            await interaction.followup.send(
+                "Insufficient FITs for this bet.", ephemeral=True
+            )
+            return
+        bet_results = []
+        for idx, selection in enumerate(selections):
+            outcome = market.outcome_map[selection]
+            cents = stakes[idx]
+            try:
+                bet_id = await run_in_thread(
+                    self._wallets.create_bet,
+                    interaction.user.id,
+                    market.id,
+                    market.name,
+                    outcome.selection_name,
+                    f"instance:{market.instance}",
+                    str(selection),
+                    cents,
+                    outcome.odds_decimal,
+                    market.closes_at,
+                )
+            except WalletError as exc:
+                await interaction.followup.send(str(exc), ephemeral=True)
+                return
+            bet_results.append((bet_id, cents, outcome))
+        total_stake = sum(cents for _, cents, _ in bet_results)
+        total_potential = sum(from_cents(cents) * outcome.odds_decimal for _, cents, outcome in bet_results)
         closes = (
             format_local(market.closes_at, self.config.default_timezone)
             if market.closes_at
             else "TBA"
         )
-        await interaction.followup.send(
-            f"Bet #{bet_id} placed on **{outcome.selection_name}** in {market.name}.\n"
-            f"Stake: {float(amount):.2f} FITs\n"
-            f"Potential return: {potential:.2f} FITs\n"
-            f"Market closes: {closes}",
-            ephemeral=True,
+        lines = []
+        for bet_id, cents, outcome in bet_results:
+            stake_amount = from_cents(cents)
+            potential = stake_amount * outcome.odds_decimal
+            lines.append(
+                f"#{bet_id} · #{outcome.argument} {outcome.selection_name} — "
+                f"stake {stake_amount:.2f} FITs → potential {potential:.2f} FITs"
+            )
+        summary = (
+            f"Placed {len(bet_results)} bet(s) on **{market.name}** (instance #{market.instance}).\n"
+            + "\n".join(lines)
+            + "\n"
+            + f"Total stake: {from_cents(total_stake):.2f} FITs ({staking_label})\n"
+            + f"Combined potential return: {total_potential:.2f} FITs\n"
+            + f"Market closes: {closes}"
         )
-
+        await interaction.followup.send(summary, ephemeral=True)
+        return
