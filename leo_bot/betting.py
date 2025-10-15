@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 import threading
-from dataclasses import dataclass
+import unicodedata
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
@@ -63,6 +65,166 @@ class BetRecord:
     created_at: datetime
     closes_at: Optional[datetime]
     closed_at: Optional[datetime]
+
+
+_PHRASE_SUBSTITUTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bsprint\s+kwalificatie\b", re.IGNORECASE), "Sprint Qualifying"),
+    (re.compile(r"\bvrije\s+training\b", re.IGNORECASE), "Free Practice"),
+    (re.compile(r"\bmarge\s+overwinning\b", re.IGNORECASE), "Winning Margin"),
+    (re.compile(r"\bsnelste\s+ronde\b", re.IGNORECASE), "Fastest Lap"),
+    (re.compile(r"\bwereld\s+kampioenschap\b", re.IGNORECASE), "World Championship"),
+    (re.compile(r"\bwereld\s+kampioen\b", re.IGNORECASE), "World Champion"),
+    (re.compile(r"\beerste\s+uitvaller\b", re.IGNORECASE), "First Retirement"),
+    (re.compile(r"\blaatste\s+uitvaller\b", re.IGNORECASE), "Last Retirement"),
+    (re.compile(r"\bbeste\s+team\b", re.IGNORECASE), "Best Team"),
+    (re.compile(r"\bhoogst[e]?\s+geclassificeerde?\b", re.IGNORECASE), "Highest Classified"),
+    (re.compile(r"\baantal\s+punten\b", re.IGNORECASE), "Total Points"),
+    (re.compile(r"\btotaal\s+punten\b", re.IGNORECASE), "Total Points"),
+    (re.compile(r"\bgrote\s+prijs\b", re.IGNORECASE), "Grand Prix"),
+)
+
+
+def _normalise_token(token: str) -> str:
+    ascii_token = unicodedata.normalize("NFKD", token).encode("ascii", "ignore").decode("ascii")
+    return ascii_token.lower()
+
+
+_TOKEN_TRANSLATIONS: dict[str, str] = {
+    "winnaar": "Winner",
+    "winnaars": "Winners",
+    "kwalificatie": "Qualifying",
+    "kwalificaties": "Qualifying",
+    "kwalificatieshootout": "Sprint Qualifying",
+    "vrij": "Free",
+    "vrije": "Free",
+    "training": "Practice",
+    "trainingen": "Practice",
+    "sprint": "Sprint",
+    "race": "Race",
+    "podium": "Podium",
+    "marge": "Margin",
+    "overwinning": "Win",
+    "overwinningen": "Wins",
+    "ronde": "Lap",
+    "rondes": "Laps",
+    "snelste": "Fastest",
+    "eerste": "First",
+    "laatste": "Last",
+    "uitvaller": "Retirement",
+    "uitvallers": "Retirements",
+    "uitvallen": "Retire",
+    "geclassificeerd": "Classified",
+    "geclassificeerde": "Classified",
+    "coureur": "Driver",
+    "coureurs": "Drivers",
+    "rijder": "Driver",
+    "rijders": "Drivers",
+    "constructeur": "Constructor",
+    "constructeurs": "Constructors",
+    "team": "Team",
+    "teams": "Teams",
+    "wereld": "World",
+    "kampioenschap": "Championship",
+    "kampioen": "Champion",
+    "kampioenen": "Champions",
+    "beste": "Best",
+    "hoogste": "Highest",
+    "hoogst": "Highest",
+    "plaats": "Place",
+    "plaatsen": "Places",
+    "aantal": "Number of",
+    "totaal": "Total",
+    "punten": "Points",
+    "ja": "Yes",
+    "nee": "No",
+    "meer": "More",
+    "minder": "Less",
+    "dan": "Than",
+    "over": "Over",
+    "onder": "Under",
+    "boven": "Over",
+    "gelijk": "Equal",
+    "geen": "None",
+    "beide": "Both",
+    "welke": "Which",
+    "pitstop": "Pit Stop",
+    "pitstops": "Pit Stops",
+    "pit": "Pit",
+    "stop": "Stop",
+}
+
+
+_COUNTRY_TRANSLATIONS: dict[str, str] = {
+    "bahrein": "Bahrain",
+    "saoedi": "Saudi",
+    "arabie": "Arabia",
+    "saudi": "Saudi",
+    "arabia": "Arabia",
+    "australie": "Australia",
+    "australië": "Australia",
+    "japan": "Japan",
+    "china": "China",
+    "azerbeidzjan": "Azerbaijan",
+    "azerbaijan": "Azerbaijan",
+    "miami": "Miami",
+    "emilia": "Emilia",
+    "romagna": "Romagna",
+    "monaco": "Monaco",
+    "canada": "Canada",
+    "spanje": "Spain",
+    "spain": "Spain",
+    "oostenrijk": "Austria",
+    "oostenrijkse": "Austrian",
+    "oostenrijker": "Austrian",
+    "oostenrijkers": "Austrians",
+    "nederland": "Netherlands",
+    "belgie": "Belgium",
+    "belgië": "Belgium",
+    "italie": "Italy",
+    "italië": "Italy",
+    "hongarije": "Hungary",
+    "groot": "Great",
+    "brittannie": "Britain",
+    "brittannië": "Britain",
+    "verenigde": "United",
+    "staten": "States",
+    "vs": "USA",
+    "amerika": "America",
+    "qatar": "Qatar",
+    "mexico": "Mexico",
+    "brazilie": "Brazil",
+    "brazilië": "Brazil",
+    "abudhabi": "Abu Dhabi",
+    "abu": "Abu",
+    "dhabi": "Dhabi",
+    "singapore": "Singapore",
+    "las": "Las",
+    "vegas": "Vegas",
+    "silverstone": "Silverstone",
+}
+
+
+_WORD_PATTERN = re.compile(r"\b[\w']+\b", re.UNICODE)
+
+
+def translate_to_english(text: Optional[str]) -> Optional[str]:
+    """Translate known Dutch betting terms to English for display."""
+
+    if not text:
+        return text
+
+    translated = text
+    for pattern, replacement in _PHRASE_SUBSTITUTIONS:
+        translated = pattern.sub(replacement, translated)
+
+    def replace_token(match: re.Match[str]) -> str:
+        token = match.group(0)
+        key = _normalise_token(token)
+        replacement = _TOKEN_TRANSLATIONS.get(key) or _COUNTRY_TRANSLATIONS.get(key)
+        return replacement if replacement else token
+
+    translated = _WORD_PATTERN.sub(replace_token, translated)
+    return translated
 
 
 class WalletStore:
@@ -464,6 +626,7 @@ class MarketInfo:
     is_closed: bool
     type_tags: set[str]
     outcomes: list[OutcomeInfo]
+    group_keys: tuple[str, ...] = field(default_factory=tuple)
 
 
 def normalise_market_type(name: str) -> set[str]:
