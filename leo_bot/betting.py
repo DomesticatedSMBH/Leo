@@ -574,6 +574,48 @@ class WalletStore:
             self._conn.commit()
             return int(bet_id)
 
+    def cancel_bet(self, user_id: int, bet_id: int) -> tuple[int, int, str, str]:
+        """Cancel an open bet, refunding the stake to the wallet."""
+
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, user_id, market_id, market_name, outcome_name, status, amount
+                FROM bets
+                WHERE id=?
+                """,
+                (bet_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise WalletError("No bet found with that ID.")
+            if row["user_id"] != user_id:
+                raise WalletError("You can only cancel bets you own.")
+            if row["status"] != "open":
+                raise WalletError("Only open bets can be cancelled.")
+
+            amount = row["amount"]
+            self._ensure_wallet_locked(cursor, user_id)
+            new_balance = self._add_transaction_locked(
+                cursor,
+                user_id,
+                amount,
+                f"Cancelled bet #{bet_id} on {row['market_name']}",
+                meta={"bet_id": bet_id, "market_id": row["market_id"]},
+            )
+            now_iso = utcnow().isoformat()
+            cursor.execute(
+                """
+                UPDATE bets
+                SET status='cancelled', closed_at=?, payout=?, notes=?
+                WHERE id=?
+                """,
+                (now_iso, amount, "Cancelled by user", bet_id),
+            )
+            self._conn.commit()
+            return amount, new_balance, row["market_name"], row["outcome_name"]
+
     def list_open_bets(self, user_id: int) -> list[BetRecord]:
         with self._lock:
             cursor = self._conn.execute(

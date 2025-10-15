@@ -50,6 +50,7 @@ class BettingCog(commands.Cog):
     """FIT currency, wallet commands and Toto betting replication."""
 
     wallet = app_commands.Group(name="wallet", description="Manage your FIT wallet")
+    bet = app_commands.Group(name="bet", description="Place and manage bets")
 
     DRIVER_MARKET_TAGS = {"winner", "top3", "top6", "top10", "qualifying", "sprint"}
     MIN_DRIVER_OUTCOMES = 5
@@ -514,11 +515,11 @@ class BettingCog(commands.Cog):
                 lines.append(
                     f"#{bet.id} {bet.market_name}: {amount:.2f} FITs on {bet.outcome_name} (closes {closes})"
                 )
-            embed.add_field(
-                name="Open Bets",
-                value="\n".join(lines),
-                inline=False,
-            )
+            value = "\n".join(lines)
+            if len(bets) > 10:
+                value += "\n…"
+            value += "\nUse `/bet cancel <bet ID>` to withdraw an open bet before it closes."
+            embed.add_field(name="Open Bets", value=value, inline=False)
         else:
             embed.add_field(
                 name="Open Bets",
@@ -587,7 +588,7 @@ class BettingCog(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="bet", description="Place a bet using FITs")
+    @bet.command(name="new", description="Place a bet using FITs")
     @app_commands.choices(
         staking=[
             app_commands.Choice(name="Split total stake", value="total"),
@@ -600,7 +601,7 @@ class BettingCog(commands.Cog):
         staking="How to apply the FIT amount across selections",
         amount="Amount of FITs to wager",
     )
-    async def bet(
+    async def bet_new(
         self,
         interaction: discord.Interaction,
         instance: int,
@@ -720,7 +721,37 @@ class BettingCog(commands.Cog):
             + "\n"
             + f"Total stake: {from_cents(total_stake):.2f} FITs ({staking_label})\n"
             + f"Combined potential return: {total_potential:.2f} FITs\n"
-            + f"Market closes: {closes}"
+            + f"Market closes: {closes}\n"
+            + "Use `/bet cancel <bet ID>` to withdraw an open bet before it closes."
         )
         await interaction.followup.send(summary, ephemeral=True)
         return
+
+    @bet.command(name="cancel", description="Cancel an open bet and refund the stake")
+    @app_commands.describe(bet_id="ID of the bet to cancel")
+    async def bet_cancel(
+        self,
+        interaction: discord.Interaction,
+        bet_id: app_commands.Range[int, 1, 1_000_000_000],
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        bet_id_int = int(bet_id)
+        try:
+            refund_cents, balance_cents, market_name, outcome_name = await run_in_thread(
+                self._wallets.cancel_bet,
+                interaction.user.id,
+                bet_id_int,
+            )
+        except WalletError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+
+        refund = from_cents(refund_cents)
+        balance = from_cents(balance_cents)
+        await interaction.followup.send(
+            (
+                f"Cancelled bet #{bet_id_int} on **{market_name}** ({outcome_name}).\n"
+                f"Refunded {refund:.2f} FITs. New balance: {balance:.2f} FITs."
+            ),
+            ephemeral=True,
+        )
