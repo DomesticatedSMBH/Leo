@@ -247,7 +247,7 @@ class BettingCog(commands.Cog):
         event, _, _ = f1.find_next_session(self.config.default_timezone)
         next_event_keys: set[str] = set()
         event_obj = None
-        if event:
+        if event is not None:
             event_obj = event
             for key in (
                 getattr(event, "EventName", None),
@@ -265,11 +265,11 @@ class BettingCog(commands.Cog):
             session_code = determine_session_code(display_name)
             closes_at = None
             related_event = None
-            if event_obj and event_name:
+            if event_obj is not None and event_name:
                 key = canonical_key(event_name)
                 if any(token and token in key for token in next_event_keys):
                     related_event = event_obj
-            if related_event and session_code:
+            if related_event is not None and session_code:
                 try:
                     closes_at = to_utc(related_event.get_session_date(session_code, utc=True))
                 except Exception:
