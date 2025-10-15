@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 import discord
+from discord import abc as discord_abc
 from discord.ext import commands, tasks
 
 from ..config import BotConfig
@@ -45,7 +46,16 @@ class F1ClockCog(commands.Cog):
             }
             for channel_id, target_name in desired.items():
                 channel = self.bot.get_channel(channel_id)
-                if not isinstance(channel, (discord.VoiceChannel, discord.TextChannel, discord.StageChannel)):
+                if channel is None:
+                    try:
+                        channel = await self.bot.fetch_channel(channel_id)
+                    except discord.NotFound:
+                        logger.warning("F1 clock channel %s not found", channel_id)
+                        continue
+                    except discord.DiscordException as exc:  # pragma: no cover - network failure
+                        logger.exception("Failed to fetch channel %s: %s", channel_id, exc)
+                        continue
+                if not isinstance(channel, discord_abc.GuildChannel):
                     logger.warning("F1 clock channel %s not found", channel_id)
                     continue
                 if channel.name != target_name:
