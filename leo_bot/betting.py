@@ -270,6 +270,10 @@ class WalletStore:
                     is_closed INTEGER NOT NULL DEFAULT 0,
                     last_updated TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS betting_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS bets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
@@ -462,6 +466,41 @@ class WalletStore:
                 (channel_id,),
             )
             return {row["market_id"]: row["message_id"] for row in cursor.fetchall()}
+
+    def get_next_betting_sync(self) -> Optional[datetime]:
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT value FROM betting_metadata WHERE key='next_betting_sync'",
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        value = row["value"]
+        try:
+            scheduled = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if scheduled.tzinfo is None:
+            scheduled = scheduled.replace(tzinfo=timezone.utc)
+        return scheduled.astimezone(timezone.utc)
+
+    def set_next_betting_sync(self, when: Optional[datetime]) -> None:
+        with self._lock:
+            if when is None:
+                self._conn.execute(
+                    "DELETE FROM betting_metadata WHERE key='next_betting_sync'",
+                )
+            else:
+                value = when.astimezone(timezone.utc).isoformat()
+                self._conn.execute(
+                    """
+                    INSERT INTO betting_metadata (key, value)
+                    VALUES ('next_betting_sync', ?)
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                    """,
+                    (value,),
+                )
+            self._conn.commit()
 
     def upsert_market_message(
         self,
