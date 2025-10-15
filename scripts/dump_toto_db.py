@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dump the wallet betting database as Markdown tables."""
+"""Dump the Toto API database as Markdown tables."""
 
 from __future__ import annotations
 
@@ -10,24 +10,9 @@ from pathlib import Path
 
 if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parent))
-    from _sqlite_markdown import default_format_value, dump_all_tables
+    from _sqlite_markdown import dump_all_tables
 else:  # pragma: no cover - executed when invoked as a module
-    from ._sqlite_markdown import default_format_value, dump_all_tables
-
-TOKEN_MULTIPLIER = 100
-MONETARY_COLUMNS: frozenset[str] = frozenset({"amount", "balance", "balance_after", "payout"})
-
-
-def from_cents(amount: int) -> float:
-    """Convert the stored integer amount into FIT units."""
-
-    return amount / TOKEN_MULTIPLIER
-
-
-def format_value(column: str, value: object) -> str:
-    if isinstance(value, int) and column in MONETARY_COLUMNS:
-        return f"{from_cents(value):.2f} ({value})"
-    return default_format_value(column, value)
+    from ._sqlite_markdown import dump_all_tables
 
 
 def main() -> int:
@@ -35,8 +20,8 @@ def main() -> int:
     parser.add_argument(
         "--db",
         type=Path,
-        default=Path("wallet.sqlite"),
-        help="Path to the wallet sqlite database (default: wallet.sqlite)",
+        default=Path("toto_f1.sqlite"),
+        help="Path to the Toto F1 sqlite database (default: toto_f1.sqlite)",
     )
     args = parser.parse_args()
 
@@ -47,7 +32,7 @@ def main() -> int:
     conn.row_factory = sqlite3.Row
 
     try:
-        tables = dump_all_tables(conn, formatter=format_value)
+        tables = dump_all_tables(conn)
         if not tables:
             print("No tables found.")
             return 0
