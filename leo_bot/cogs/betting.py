@@ -86,7 +86,6 @@ class BettingCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     DRIVER_MARKET_TAGS = {"winner", "top3", "top6", "top10", "qualifying", "sprint"}
-    MIN_DRIVER_OUTCOMES = 5
 
     def __init__(self, bot: commands.Bot, config: BotConfig):
         self.bot = bot
@@ -347,10 +346,7 @@ class BettingCog(commands.Cog):
             return markets, market_ids, normalized_outcomes
 
         try:
-            if self.config.toto_requests_only:
-                await refresh_toto(self._toto, mode="requests")
-            else:
-                await refresh_toto(self._toto)
+            await refresh_toto(self._toto, mode="playwright")
         except Exception:
             logger.exception("Failed to refresh Toto data")
         markets, market_ids, outcomes_map = await load_markets_and_outcomes()
@@ -358,24 +354,6 @@ class BettingCog(commands.Cog):
             self._latest_markets = []
             self._last_cache_at = now
             return []
-
-        if (
-            not self.config.toto_requests_only
-            and self._needs_playwright_fallback(markets, outcomes_map)
-        ):
-            logger.info(
-                "Detected suspiciously low driver outcome count; retrying Toto refresh with Playwright"
-            )
-            try:
-                await refresh_toto(self._toto, mode="playwright")
-            except Exception:
-                logger.exception("Playwright fallback Toto refresh failed")
-            else:
-                markets, market_ids, outcomes_map = await load_markets_and_outcomes()
-                if not market_ids:
-                    self._latest_markets = []
-                    self._last_cache_at = now
-                    return []
         processed = await run_in_thread(
             self._build_market_infos,
             markets,
@@ -386,21 +364,6 @@ class BettingCog(commands.Cog):
         self._latest_markets = processed
         self._last_cache_at = now
         return processed
-
-    def _needs_playwright_fallback(
-        self, markets: list, outcomes_map: dict[int, list]
-    ) -> bool:
-        for market in markets:
-            if not self._is_driver_market(market.name):
-                continue
-            outcomes = outcomes_map.get(market.id, [])
-            if outcomes and len(outcomes) < self.MIN_DRIVER_OUTCOMES:
-                return True
-        return False
-
-    def _is_driver_market(self, market_name: str) -> bool:
-        tags = normalise_market_type(market_name)
-        return bool(tags & self.DRIVER_MARKET_TAGS)
 
     def _build_market_infos(
         self,

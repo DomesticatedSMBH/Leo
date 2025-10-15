@@ -61,9 +61,8 @@ Leo reads settings from environment variables (dotenv files are loaded automatic
 | `BETTING_CHANNEL` | – | Text channel that receives Toto market embeds and updates.【F:leo_bot/config.py†L108-L114】【F:leo_bot/cogs/betting.py†L84-L220】 |
 | `SERVER_RANKINGS_CHANNEL` | – | Optional text channel for future server ranking summaries (used by wallet/betting recaps). |
 | `SCHEDULES_PATH` | `schedules.json` | Location on disk where scheduled jobs are persisted.【F:leo_bot/config.py†L110-L112】【F:leo_bot/scheduler.py†L39-L65】 |
-| `TOTO_F1_DB` | `toto_f1.sqlite` | Path to the Toto scraping database.【F:leo_bot/config.py†L111-L115】【F:toto_f1_api.py†L33-L133】 |
-| `WALLET_DB_PATH` | `wallet.sqlite` | SQLite file used for wallet, bet, and market metadata.【F:leo_bot/config.py†L112-L116】【F:leo_bot/betting.py†L231-L328】 |
-| `TOTO_REQUESTS_ONLY` | `false` | Force Toto refreshes to use cached HTML and skip Playwright fallbacks.【F:leo_bot/config.py†L113-L115】 |
+| `TOTO_F1_DB` | `toto_f1.sqlite` | Path to the Playwright-scraped Toto database.【F:leo_bot/config.py†L103-L105】【F:toto_f1_api.py†L33-L133】 |
+| `WALLET_DB_PATH` | `wallet.sqlite` | SQLite file used for wallet, bet, and market metadata.【F:leo_bot/config.py†L104-L105】【F:leo_bot/betting.py†L231-L328】 |
 
 ## Command reference
 Leo registers slash-command groups for wallets, betting, scheduling, and moderation. The sections below focus on FIT economy features.
