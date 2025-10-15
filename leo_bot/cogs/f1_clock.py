@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timedelta
 
 import discord
 from discord import abc as discord_abc
-from discord.ext import commands, tasks
+from discord.ext import commands
 
 from ..config import BotConfig
 from ..f1 import find_next_session, format_session_channel_strings
@@ -19,13 +20,16 @@ class F1ClockCog(commands.Cog):
         self.config = config
         self._rename_tasks: dict[int, tuple[str, asyncio.Task[None]]] = {}
         self._ready_task: asyncio.Task[None] | None = None
+        self._clock_task: asyncio.Task[None] | None = None
 
     async def cog_load(self) -> None:
-        self.clock_loop.start()
+        self._clock_task = asyncio.create_task(self._clock_loop())
         self._ready_task = asyncio.create_task(self._update_once_ready())
 
     def cog_unload(self) -> None:
-        self.clock_loop.cancel()
+        if self._clock_task is not None:
+            self._clock_task.cancel()
+            self._clock_task = None
         if self._ready_task is not None:
             self._ready_task.cancel()
             self._ready_task = None
@@ -33,13 +37,34 @@ class F1ClockCog(commands.Cog):
             task.cancel()
         self._rename_tasks.clear()
 
-    @tasks.loop(minutes=5, reconnect=True)
-    async def clock_loop(self) -> None:
-        await self.update_channels()
-
-    @clock_loop.before_loop
-    async def clock_loop_before_loop(self) -> None:
+    async def _clock_loop(self) -> None:
         await self.bot.wait_until_ready()
+        while True:
+            try:
+                await self._sleep_until_next_mark()
+                logger.info(
+                    "Running scheduled F1 clock update at %s", datetime.utcnow().isoformat()
+                )
+                await self.update_channels()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # pragma: no cover - defensive loop guard
+                logger.exception("F1 clock loop encountered an error; continuing")
+
+    async def _sleep_until_next_mark(self) -> None:
+        now = datetime.utcnow()
+        next_run = now.replace(second=0, microsecond=0)
+        minutes_to_add = (10 - (now.minute % 10)) % 10
+        next_run += timedelta(minutes=minutes_to_add)
+        if next_run <= now:
+            next_run += timedelta(minutes=10)
+        sleep_seconds = (next_run - now).total_seconds()
+        logger.debug(
+            "Next F1 clock update scheduled for %s (in %.2f seconds)",
+            next_run.isoformat(),
+            sleep_seconds,
+        )
+        await asyncio.sleep(sleep_seconds)
 
     async def _update_once_ready(self) -> None:
         await self.bot.wait_until_ready()
