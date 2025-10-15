@@ -102,7 +102,13 @@ class ScheduleCog(commands.Cog):
             created_by=interaction.user.id,
         )
         if kind == "message":
-            job.content = content
+            if content is None or not content.strip():
+                await interaction.response.send_message(
+                    "Provide message text for scheduled messages.",
+                    ephemeral=True,
+                )
+                return
+            job.content = content.strip()
         else:
             if not answers:
                 await interaction.response.send_message(
