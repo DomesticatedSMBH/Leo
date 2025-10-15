@@ -59,7 +59,6 @@ class BettingCog(commands.Cog):
         self._cache_ttl = timedelta(minutes=45)
 
     async def cog_load(self) -> None:
-        self.bot.tree.add_command(self.wallet)
         if self.config.betting_channel_id:
             await self.bot.wait_until_ready()
             await self.sync_betting_channel()
@@ -68,10 +67,6 @@ class BettingCog(commands.Cog):
             logger.warning("BETTING_CHANNEL not configured; betting channel updates disabled")
 
     def cog_unload(self) -> None:
-        try:
-            self.bot.tree.remove_command(self.wallet.name, type=self.wallet.type)
-        except Exception:  # pragma: no cover - defensive
-            pass
         if self.hourly_update.is_running():
             self.hourly_update.cancel()
         self._wallets.close()
