@@ -1,2 +1,2 @@
 # Leo
-Leo Bot
+# Formula Insights Bot
