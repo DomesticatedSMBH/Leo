@@ -54,6 +54,7 @@ class ScheduleManager:
         return list(self._jobs)
 
     def load(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
         if not self._path.exists():
             logger.info("No schedules file found at %s; starting fresh", self._path)
             self._jobs = []
@@ -69,6 +70,7 @@ class ScheduleManager:
         logger.info("Loaded %d scheduled jobs", len(self._jobs))
 
     def save(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
         try:
             with self._path.open("w", encoding="utf-8") as handle:
                 json.dump([job.to_dict() for job in self._jobs], handle, ensure_ascii=False, indent=2)
