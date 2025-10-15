@@ -19,32 +19,32 @@ class F1ClockCog(commands.Cog):
         self.bot = bot
         self.config = config
         self._rename_tasks: dict[int, tuple[str, asyncio.Task[None]]] = {}
-        self._ready_task: asyncio.Task[None] | None = None
         self._clock_task: asyncio.Task[None] | None = None
 
     async def cog_load(self) -> None:
         self._clock_task = asyncio.create_task(self._clock_loop())
-        self._ready_task = asyncio.create_task(self._update_once_ready())
 
     def cog_unload(self) -> None:
         if self._clock_task is not None:
             self._clock_task.cancel()
             self._clock_task = None
-        if self._ready_task is not None:
-            self._ready_task.cancel()
-            self._ready_task = None
         for _, task in self._rename_tasks.values():
             task.cancel()
         self._rename_tasks.clear()
 
     async def _clock_loop(self) -> None:
         await self.bot.wait_until_ready()
+        first_run = True
         while True:
             try:
-                await self._sleep_until_next_mark()
-                logger.info(
-                    "Running scheduled F1 clock update at %s", datetime.utcnow().isoformat()
-                )
+                if not first_run:
+                    await self._sleep_until_next_mark()
+                    logger.info(
+                        "Running scheduled F1 clock update at %s",
+                        datetime.utcnow().isoformat(),
+                    )
+                else:
+                    first_run = False
                 await self.update_channels()
             except asyncio.CancelledError:
                 raise
@@ -65,10 +65,6 @@ class F1ClockCog(commands.Cog):
             sleep_seconds,
         )
         await asyncio.sleep(sleep_seconds)
-
-    async def _update_once_ready(self) -> None:
-        await self.bot.wait_until_ready()
-        await self.update_channels()
 
     async def update_channels(self) -> None:
         try:
