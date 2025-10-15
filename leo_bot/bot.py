@@ -25,21 +25,24 @@ class LeoBot(commands.Bot):
         self._ready_notified = False
 
     async def setup_hook(self) -> None:
-        # Remove any previously registered global commands before loading
-        # the cogs so that we can perform clean per-guild syncs afterwards.
+        # Remove any previously registered global commands before loading the
+        # cogs so that we can perform clean synchronisation afterwards.
         self.tree.clear_commands(guild=None)
-        await self.tree.sync(guild=None)
 
         await self.add_cog(ScheduleCog(self, self.config, self.schedule_manager))
         await self.add_cog(F1ClockCog(self, self.config))
         await self.add_cog(BettingCog(self, self.config))
         await self.add_cog(ModerationCog(self, self.config))
 
-        guild_ids = {
+        guild_ids = [
             guild_id
             for guild_id in (self.config.guild_id, self.config.test_guild_id)
-            if guild_id
-        }
+            if guild_id is not None
+        ]
+
+        # Ensure global commands – such as /f1_next – remain registered so they
+        # are available across every guild.
+        await self.tree.sync()
 
         for guild_id in guild_ids:
             await self.tree.sync(guild=discord.Object(id=guild_id))
