@@ -239,9 +239,9 @@ class BettingCog(commands.Cog):
         base_title = translate_to_english(market.name) if market.name else market.name
         if market.instance is not None:
             if base_title:
-                title = f"#{market.instance} · {base_title}"
+                title = f"Instance #{market.instance} · {base_title}"
             else:
-                title = f"#{market.instance}"
+                title = f"Instance #{market.instance}"
         else:
             title = base_title or "Betting Market"
         embed = discord.Embed(title=title, color=color)
