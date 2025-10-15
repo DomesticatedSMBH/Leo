@@ -32,8 +32,16 @@ class LeoBot(commands.Bot):
         # Limit command registration to the configured guilds so that we only
         # sync once and avoid duplicate registrations.
         guild_ids = {self.config.guild_id, self.config.test_guild_id}
-        self.tree.guilds = [discord.Object(id=guild_id) for guild_id in guild_ids]
-        await self.tree.sync()
+
+        # Clear any global commands that might remain registered from previous
+        # runs before performing per-guild syncs.
+        self.tree.clear_commands(guild=None)
+        await self.tree.sync(guild=None)
+
+        guild_objects = [discord.Object(id=guild_id) for guild_id in guild_ids]
+        self.tree.guilds = guild_objects
+        for guild in guild_objects:
+            await self.tree.sync(guild=guild)
 
     async def on_ready(self) -> None:
         await self.change_presence(activity=discord.Game("with Charles"))
