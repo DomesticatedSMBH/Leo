@@ -69,6 +69,17 @@ class BettingCog(commands.Cog):
     wallet = app_commands.Group(name="wallet", description="Manage your FIT wallet")
     bet = app_commands.Group(name="bet", description="Place and manage bets")
 
+    @app_commands.command(name="shop", description="Browse the FIT shop")
+    async def shop(self, interaction: discord.Interaction) -> None:
+        """Placeholder for the upcoming FIT shop experience."""
+        embed = discord.Embed(
+            title="FIT Shop",
+            description="The shop feature is currently a work in progress.",
+            color=0xFF9117,
+        )
+        embed.set_footer(text="Check back soon for goodies!")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     DRIVER_MARKET_TAGS = {"winner", "top3", "top6", "top10", "qualifying", "sprint"}
     MIN_DRIVER_OUTCOMES = 5
 
