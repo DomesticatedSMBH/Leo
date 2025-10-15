@@ -673,8 +673,11 @@ async def run_in_thread(func, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
 
-async def refresh_toto(client: TotoF1Client, mode: str = "requests") -> None:
-    await run_in_thread(client.refresh, mode)
+async def refresh_toto(client: TotoF1Client, mode: Optional[str] = None) -> None:
+    if mode is None:
+        await run_in_thread(client.refresh)
+    else:
+        await run_in_thread(client.refresh, mode)
 
 
 async def fetch_markets(client: TotoF1Client, market_ids: Iterable[int]):
