@@ -46,6 +46,23 @@ def _split_market_name(name: str) -> tuple[Optional[str], str]:
     return None, name
 
 
+def _flip_comma_name(name: Optional[str]) -> Optional[str]:
+    if not name or "," not in name:
+        return name
+
+    leading_ws = name[: len(name) - len(name.lstrip())]
+    trailing_ws = name[len(name.rstrip()) :]
+    core = name.strip()
+    last, first = core.split(",", 1)
+    last = last.strip()
+    first = first.strip()
+
+    if not last or not first:
+        return name
+
+    return f"{leading_ws}{first} {last}{trailing_ws}"
+
+
 class BettingCog(commands.Cog):
     """FIT currency, wallet commands and Toto betting replication."""
 
@@ -396,13 +413,14 @@ class BettingCog(commands.Cog):
             outcomes = []
             for argument, outcome in enumerate(outcomes_map.get(market.id, [])):
                 translated_outcome = translate_to_english(outcome.selection_name)
+                formatted_outcome = _flip_comma_name(translated_outcome)
                 outcomes.append(
                     OutcomeInfo(
                         market_id=market.id,
-                        selection_name=translated_outcome,
+                        selection_name=formatted_outcome,
                         odds_decimal=outcome.odds_decimal,
                         implied_probability=outcome.implied_prob,
-                        canonical_key=canonical_key(translated_outcome),
+                        canonical_key=canonical_key(formatted_outcome),
                         argument=argument,
                     )
                 )
