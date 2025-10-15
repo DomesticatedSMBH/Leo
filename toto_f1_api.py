@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import re, sqlite3, hashlib, json
+import re, sqlite3, hashlib, json, threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
@@ -78,112 +78,176 @@ CREATE TABLE IF NOT EXISTS outcome_entities (outcome_id INTEGER PRIMARY KEY REFE
 
 class DB:
     def __init__(self, path="toto_f1.sqlite"):
-        self.conn = sqlite3.connect(path); self.conn.row_factory = sqlite3.Row
-        self.conn.executescript(SCHEMA); self.conn.commit()
+        self._lock = threading.RLock()
+        self.conn = sqlite3.connect(path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        with self._lock:
+            self.conn.executescript(SCHEMA)
+            self.conn.commit()
 
     def new_snapshot(self, url, html)->int:
         sha = hashlib.sha256(html.encode("utf-8")).hexdigest()
-        cur = self.conn.execute("INSERT INTO snapshots (fetched_at,url,html_sha256,html) VALUES (?,?,?,?)",
-                                (datetime.now(timezone.utc).replace(microsecond=0).isoformat(), url, sha, html))
-        self.conn.commit(); return cur.lastrowid
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT INTO snapshots (fetched_at,url,html_sha256,html) VALUES (?,?,?,?)",
+                (datetime.now(timezone.utc).replace(microsecond=0).isoformat(), url, sha, html),
+            )
+            self.conn.commit()
+            return cur.lastrowid
 
     def upsert_section(self, title:str)->int:
-        self.conn.execute("INSERT OR IGNORE INTO sections (title) VALUES (?)",(title,)); self.conn.commit()
-        return self.conn.execute("SELECT id FROM sections WHERE title=?",(title,)).fetchone()["id"]
+        with self._lock:
+            self.conn.execute("INSERT OR IGNORE INTO sections (title) VALUES (?)",(title,))
+            self.conn.commit()
+            return self.conn.execute("SELECT id FROM sections WHERE title=?",(title,)).fetchone()["id"]
 
     def upsert_event(self, name, section_id)->int:
-        self.conn.execute("INSERT OR IGNORE INTO events (name,section_id) VALUES (?,?)",(name, section_id))
-        self.conn.commit()
-        row = self.conn.execute("SELECT id,section_id FROM events WHERE name=?",(name,)).fetchone()
-        if row and section_id and row["section_id"]!=section_id:
-            self.conn.execute("UPDATE events SET section_id=? WHERE id=?",(section_id,row["id"])); self.conn.commit()
-        return row["id"]
+        with self._lock:
+            self.conn.execute("INSERT OR IGNORE INTO events (name,section_id) VALUES (?,?)",(name, section_id))
+            self.conn.commit()
+            row = self.conn.execute("SELECT id,section_id FROM events WHERE name=?",(name,)).fetchone()
+            if row and section_id and row["section_id"]!=section_id:
+                self.conn.execute("UPDATE events SET section_id=? WHERE id=?",(section_id,row["id"]))
+                self.conn.commit()
+            return row["id"]
 
     def upsert_market(self, name, event_id, snapshot_id)->int:
-        self.conn.execute("INSERT OR IGNORE INTO markets (name,event_id,last_seen_snapshot_id) VALUES (?,?,?)",
-                          (name,event_id,snapshot_id)); self.conn.commit()
-        row = self.conn.execute("SELECT id,event_id FROM markets WHERE name=?",(name,)).fetchone()
-        self.conn.execute("UPDATE markets SET last_seen_snapshot_id=? WHERE id=?",(snapshot_id,row["id"])); self.conn.commit()
-        if event_id and row["event_id"]!=event_id:
-            self.conn.execute("UPDATE markets SET event_id=? WHERE id=?",(event_id,row["id"])); self.conn.commit()
-        return row["id"]
+        with self._lock:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO markets (name,event_id,last_seen_snapshot_id) VALUES (?,?,?)",
+                (name,event_id,snapshot_id),
+            )
+            self.conn.commit()
+            row = self.conn.execute("SELECT id,event_id FROM markets WHERE name=?",(name,)).fetchone()
+            self.conn.execute("UPDATE markets SET last_seen_snapshot_id=? WHERE id=?",(snapshot_id,row["id"]))
+            self.conn.commit()
+            if event_id and row["event_id"]!=event_id:
+                self.conn.execute("UPDATE markets SET event_id=? WHERE id=?",(event_id,row["id"]))
+                self.conn.commit()
+            return row["id"]
 
     def insert_outcome(self, market_id, selection_name, odds_decimal, snapshot_id)->int:
         imp = implied_probability(odds_decimal)
-        cur = self.conn.execute("INSERT INTO outcomes (market_id,selection_name,odds_decimal,implied_prob,snapshot_id) "
-                                "VALUES (?,?,?,?,?)",(market_id, selection_name, odds_decimal, imp, snapshot_id))
-        self.conn.commit(); return cur.lastrowid
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT INTO outcomes (market_id,selection_name,odds_decimal,implied_prob,snapshot_id) "
+                "VALUES (?,?,?,?,?)",
+                (market_id, selection_name, odds_decimal, imp, snapshot_id),
+            )
+            self.conn.commit()
+            return cur.lastrowid
 
     def upsert_entity_with_alias(self, name, snapshot_id, typ=None)->int:
         key = canonical_key(name)
-        row = self.conn.execute("SELECT id FROM entities WHERE canonical_key=?",(key,)).fetchone()
-        if row:
-            entity_id = row["id"]; self._upsert_alias(entity_id, name, snapshot_id); return entity_id
-        cur = self.conn.execute("INSERT INTO entities (type,canonical_name,canonical_key) VALUES (?,?,?)",(typ,name,key))
-        self.conn.commit(); entity_id = cur.lastrowid; self._upsert_alias(entity_id, name, snapshot_id); return entity_id
+        with self._lock:
+            row = self.conn.execute("SELECT id FROM entities WHERE canonical_key=?",(key,)).fetchone()
+            if row:
+                entity_id = row["id"]
+                self._upsert_alias(entity_id, name, snapshot_id)
+                return entity_id
+            cur = self.conn.execute(
+                "INSERT INTO entities (type,canonical_name,canonical_key) VALUES (?,?,?)",
+                (typ,name,key),
+            )
+            self.conn.commit()
+            entity_id = cur.lastrowid
+            self._upsert_alias(entity_id, name, snapshot_id)
+            return entity_id
 
     def _upsert_alias(self, entity_id, alias, snapshot_id):
         ak = canonical_key(alias)
-        row = self.conn.execute("SELECT id FROM entity_aliases WHERE entity_id=? AND alias_key=?",(entity_id,ak)).fetchone()
-        if row:
-            self.conn.execute("UPDATE entity_aliases SET last_seen_snapshot_id=? WHERE id=?",(snapshot_id,row["id"]))
-        else:
-            self.conn.execute("INSERT INTO entity_aliases (entity_id,alias,alias_key,first_seen_snapshot_id,last_seen_snapshot_id) "
-                              "VALUES (?,?,?,?,?)",(entity_id,alias,ak,snapshot_id,snapshot_id))
-        self.conn.commit()
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT id FROM entity_aliases WHERE entity_id=? AND alias_key=?",
+                (entity_id,ak),
+            ).fetchone()
+            if row:
+                self.conn.execute(
+                    "UPDATE entity_aliases SET last_seen_snapshot_id=? WHERE id=?",
+                    (snapshot_id,row["id"]),
+                )
+            else:
+                self.conn.execute(
+                    "INSERT INTO entity_aliases (entity_id,alias,alias_key,first_seen_snapshot_id,last_seen_snapshot_id) "
+                    "VALUES (?,?,?,?,?)",
+                    (entity_id,alias,ak,snapshot_id,snapshot_id),
+                )
+            self.conn.commit()
 
     def link_outcome_entity(self, outcome_id, entity_id):
-        self.conn.execute("INSERT OR IGNORE INTO outcome_entities (outcome_id,entity_id) VALUES (?,?)",(outcome_id,entity_id))
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO outcome_entities (outcome_id,entity_id) VALUES (?,?)",
+                (outcome_id,entity_id),
+            )
+            self.conn.commit()
 
     def list_outcomes_latest(self, market_id: int):
-        snap = self.conn.execute(
-            "SELECT MAX(snapshot_id) AS s FROM outcomes WHERE market_id=?", (market_id,)
-        ).fetchone()["s"]
-        rows = self.conn.execute(
-            """SELECT o.id,o.market_id,o.selection_name,o.odds_decimal,o.implied_prob,oe.entity_id
-            FROM outcomes o
-            LEFT JOIN outcome_entities oe ON oe.outcome_id=o.id
-            WHERE o.market_id=? AND o.snapshot_id=?
-            ORDER BY o.id""",
-            (market_id, snap)
-        ).fetchall()
-        return [Outcome(**dict(r)) for r in rows]
+        with self._lock:
+            snap = self.conn.execute(
+                "SELECT MAX(snapshot_id) AS s FROM outcomes WHERE market_id=?",
+                (market_id,),
+            ).fetchone()["s"]
+            rows = self.conn.execute(
+                """SELECT o.id,o.market_id,o.selection_name,o.odds_decimal,o.implied_prob,oe.entity_id
+                FROM outcomes o
+                LEFT JOIN outcome_entities oe ON oe.outcome_id=o.id
+                WHERE o.market_id=? AND o.snapshot_id=?
+                ORDER BY o.id""",
+                (market_id, snap),
+            ).fetchall()
+            return [Outcome(**dict(r)) for r in rows]
 
     # public API
     def list_sections(self)->List[Section]:
-        return [Section(**dict(r)) for r in self.conn.execute("SELECT id,title FROM sections ORDER BY id")]
+        with self._lock:
+            return [Section(**dict(r)) for r in self.conn.execute("SELECT id,title FROM sections ORDER BY id")]
     def list_events(self, section_id:Optional[int]=None)->List[Event]:
         q="SELECT id,section_id,name FROM events"; args=()
         if section_id: q+=" WHERE section_id=?"; args=(section_id,)
         q+=" ORDER BY id"
-        return [Event(**dict(r)) for r in self.conn.execute(q,args)]
+        with self._lock:
+            return [Event(**dict(r)) for r in self.conn.execute(q,args)]
     def list_markets(self, event_id:Optional[int]=None)->List[Market]:
         q="SELECT id,event_id,name FROM markets"; args=()
         if event_id: q+=" WHERE event_id=?"; args=(event_id,)
         q+=" ORDER BY id"
-        return [Market(**dict(r)) for r in self.conn.execute(q,args)]
+        with self._lock:
+            return [Market(**dict(r)) for r in self.conn.execute(q,args)]
     def list_outcomes(self, market_id:int)->List[Outcome]:
         q = """SELECT o.id,o.market_id,o.selection_name,o.odds_decimal,o.implied_prob,oe.entity_id
                FROM outcomes o LEFT JOIN outcome_entities oe ON oe.outcome_id=o.id
                WHERE o.market_id=? ORDER BY o.id"""
-        return [Outcome(**dict(r)) for r in self.conn.execute(q,(market_id,))]
+        with self._lock:
+            return [Outcome(**dict(r)) for r in self.conn.execute(q,(market_id,))]
     def find_entity(self, name_or_alias:str)->Optional[Entity]:
         k = canonical_key(name_or_alias)
-        r = self.conn.execute("""SELECT e.id,e.type,e.canonical_name,e.canonical_key
-                                 FROM entities e LEFT JOIN entity_aliases a ON a.entity_id=e.id
-                                 WHERE e.canonical_key=? OR a.alias_key=? LIMIT 1""",(k,k)).fetchone()
-        return Entity(**dict(r)) if r else None
+        with self._lock:
+            r = self.conn.execute(
+                """SELECT e.id,e.type,e.canonical_name,e.canonical_key
+                                     FROM entities e LEFT JOIN entity_aliases a ON a.entity_id=e.id
+                                     WHERE e.canonical_key=? OR a.alias_key=? LIMIT 1""",
+                (k,k),
+            ).fetchone()
+            return Entity(**dict(r)) if r else None
     def entity_aliases(self, entity_id:int)->List[Tuple[str,int,int]]:
-        return [(r["alias"],r["first_seen_snapshot_id"],r["last_seen_snapshot_id"])
-                for r in self.conn.execute("SELECT alias,first_seen_snapshot_id,last_seen_snapshot_id FROM entity_aliases WHERE entity_id=?",(entity_id,))]
+        with self._lock:
+            return [
+                (r["alias"],r["first_seen_snapshot_id"],r["last_seen_snapshot_id"])
+                for r in self.conn.execute(
+                    "SELECT alias,first_seen_snapshot_id,last_seen_snapshot_id FROM entity_aliases WHERE entity_id=?",
+                    (entity_id,),
+                )
+            ]
     def entity_odds_history(self, entity_id:int)->List[dict]:
         q = """SELECT o.id AS outcome_id,o.market_id,o.selection_name,o.odds_decimal,o.implied_prob,o.snapshot_id,m.name AS market_name
                FROM outcomes o JOIN outcome_entities oe ON oe.outcome_id=o.id JOIN markets m ON m.id=o.market_id
                WHERE oe.entity_id=? ORDER BY o.snapshot_id,o.id"""
-        return [dict(r) for r in self.conn.execute(q,(entity_id,))]
+        with self._lock:
+            return [dict(r) for r in self.conn.execute(q,(entity_id,))]
     def close(self):
-        self.conn.close()
+        with self._lock:
+            self.conn.close()
 
 
 # ---- Scraper

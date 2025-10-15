@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -57,16 +58,20 @@ class BettingCog(commands.Cog):
         self._latest_markets: list[MarketInfo] = []
         self._last_cache_at: Optional[datetime] = None
         self._cache_ttl = timedelta(minutes=45)
+        self._ready_task: asyncio.Task[None] | None = None
 
     async def cog_load(self) -> None:
-        if self.config.betting_channel_id:
-            await self.bot.wait_until_ready()
-            await self.sync_betting_channel()
-            self.hourly_update.start()
-        else:
+        if not self.config.betting_channel_id:
             logger.warning("BETTING_CHANNEL not configured; betting channel updates disabled")
+            return
+
+        if self._ready_task is None or self._ready_task.done():
+            self._ready_task = asyncio.create_task(self._initialise_after_ready())
 
     def cog_unload(self) -> None:
+        if self._ready_task is not None:
+            self._ready_task.cancel()
+            self._ready_task = None
         if self.hourly_update.is_running():
             self.hourly_update.cancel()
         self._wallets.close()
@@ -79,6 +84,21 @@ class BettingCog(commands.Cog):
     @hourly_update.error
     async def hourly_update_error(self, exc: Exception) -> None:  # pragma: no cover - logging only
         logger.exception("Hourly betting update failed: %s", exc)
+
+    async def _initialise_after_ready(self) -> None:
+        try:
+            await self.bot.wait_until_ready()
+            await self.sync_betting_channel()
+            if not self.hourly_update.is_running():
+                self.hourly_update.start()
+        except asyncio.CancelledError:  # pragma: no cover - cancellation during shutdown
+            raise
+        except Exception:  # pragma: no cover - logging only
+            logger.exception("Failed to perform initial betting channel sync")
+        finally:
+            current = asyncio.current_task()
+            if self._ready_task is current:
+                self._ready_task = None
 
     async def sync_betting_channel(self) -> None:
         channel_id = self.config.betting_channel_id
@@ -227,7 +247,7 @@ class BettingCog(commands.Cog):
         event, _, _ = f1.find_next_session(self.config.default_timezone)
         next_event_keys: set[str] = set()
         event_obj = None
-        if event:
+        if event is not None:
             event_obj = event
             for key in (
                 getattr(event, "EventName", None),
@@ -245,11 +265,11 @@ class BettingCog(commands.Cog):
             session_code = determine_session_code(display_name)
             closes_at = None
             related_event = None
-            if event_obj and event_name:
+            if event_obj is not None and event_name:
                 key = canonical_key(event_name)
                 if any(token and token in key for token in next_event_keys):
                     related_event = event_obj
-            if related_event and session_code:
+            if related_event is not None and session_code:
                 try:
                     closes_at = to_utc(related_event.get_session_date(session_code, utc=True))
                 except Exception:
