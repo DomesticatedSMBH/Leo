@@ -4,7 +4,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Optional
 
 import discord
 import pytz
@@ -28,8 +28,11 @@ class BotConfig:
     f1_channels: Mapping[str, int]
     schedule_path: Path
     default_timezone: pytz.BaseTzInfo
+    betting_channel_id: Optional[int] = None
     max_poll_hours: int = 32 * 24
     f1_cache_path: Path = Path(".fastf1cache")
+    toto_db_path: Path = Path("toto_f1.sqlite")
+    wallet_db_path: Path = Path("wallet.sqlite")
 
 
 def _require_env(name: str) -> str:
@@ -66,6 +69,16 @@ def _parse_admin_ids(*env_names: str) -> tuple[int, ...]:
     return tuple(ids)
 
 
+def _parse_optional_int_env(name: str) -> Optional[int]:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Environment variable {name} must be an integer") from exc
+
+
 def build_config() -> BotConfig:
     """Assemble :class:`BotConfig` from environment variables."""
 
@@ -84,8 +97,11 @@ def build_config() -> BotConfig:
             "date": _parse_int_env("F1_CHANNEL_DATE", default=1425959704307175494),
             "countdown": _parse_int_env("F1_CHANNEL_COUNTDOWN", default=1425959786062545099),
         },
+        betting_channel_id=_parse_optional_int_env("BETTING_CHANNEL"),
         schedule_path=Path(os.getenv("SCHEDULES_PATH", "schedules.json")),
         default_timezone=pytz.utc,
+        toto_db_path=Path(os.getenv("TOTO_F1_DB", "toto_f1.sqlite")),
+        wallet_db_path=Path(os.getenv("WALLET_DB_PATH", "wallet.sqlite")),
     )
     return config
 
