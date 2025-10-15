@@ -17,19 +17,29 @@ class F1ClockCog(commands.Cog):
     def __init__(self, bot: commands.Bot, config: BotConfig):
         self.bot = bot
         self.config = config
-        self._rename_tasks: dict[int, asyncio.Task[None]] = {}
+        self._rename_tasks: dict[int, tuple[str, asyncio.Task[None]]] = {}
+        self._ready_task: asyncio.Task[None] | None = None
+
+    async def cog_load(self) -> None:
         self.clock_loop.start()
-        self.bot.loop.create_task(self._update_once_ready())
+        self._ready_task = asyncio.create_task(self._update_once_ready())
 
     def cog_unload(self) -> None:
         self.clock_loop.cancel()
-        for task in self._rename_tasks.values():
+        if self._ready_task is not None:
+            self._ready_task.cancel()
+            self._ready_task = None
+        for _, task in self._rename_tasks.values():
             task.cancel()
         self._rename_tasks.clear()
 
     @tasks.loop(minutes=5, reconnect=True)
     async def clock_loop(self) -> None:
         await self.update_channels()
+
+    @clock_loop.before_loop
+    async def clock_loop_before_loop(self) -> None:
+        await self.bot.wait_until_ready()
 
     async def _update_once_ready(self) -> None:
         await self.bot.wait_until_ready()
@@ -75,7 +85,10 @@ class F1ClockCog(commands.Cog):
         target_name: str,
     ) -> None:
         if channel_id in self._rename_tasks:
-            return
+            previous_target, previous_task = self._rename_tasks[channel_id]
+            if previous_target == target_name and not previous_task.done():
+                return
+            previous_task.cancel()
 
         async def _runner() -> None:
             try:
@@ -85,7 +98,10 @@ class F1ClockCog(commands.Cog):
             except Exception as exc:  # pragma: no cover - network failure
                 logger.exception("Failed to rename channel %s: %s", channel_id, exc)
             finally:
-                self._rename_tasks.pop(channel_id, None)
+                current_task = asyncio.current_task()
+                stored = self._rename_tasks.get(channel_id)
+                if stored is not None and stored[1] is current_task:
+                    self._rename_tasks.pop(channel_id, None)
 
-        task = self.bot.loop.create_task(_runner())
-        self._rename_tasks[channel_id] = task
+        task = asyncio.create_task(_runner())
+        self._rename_tasks[channel_id] = (target_name, task)
