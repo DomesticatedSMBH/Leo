@@ -723,7 +723,7 @@ class BettingCog(commands.Cog):
             stake_amount = from_cents(cents)
             potential = stake_amount * outcome.odds_decimal
             lines.append(
-                f"#{bet_id} · #{outcome.argument} {outcome.selection_name} — "
+                f"Instance #{bet_id} · #{outcome.argument} {outcome.selection_name} — "
                 f"stake {stake_amount:.2f} FITs → potential {potential:.2f} FITs"
             )
         summary = (
