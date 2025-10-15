@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -16,11 +17,15 @@ class F1ClockCog(commands.Cog):
     def __init__(self, bot: commands.Bot, config: BotConfig):
         self.bot = bot
         self.config = config
+        self._rename_tasks: dict[int, asyncio.Task[None]] = {}
         self.clock_loop.start()
         self.bot.loop.create_task(self._update_once_ready())
 
     def cog_unload(self) -> None:
         self.clock_loop.cancel()
+        for task in self._rename_tasks.values():
+            task.cancel()
+        self._rename_tasks.clear()
 
     @tasks.loop(minutes=5, reconnect=True)
     async def clock_loop(self) -> None:
@@ -59,9 +64,28 @@ class F1ClockCog(commands.Cog):
                     logger.warning("F1 clock channel %s not found", channel_id)
                     continue
                 if channel.name != target_name:
-                    try:
-                        await channel.edit(name=target_name, reason="F1 next session update")
-                    except Exception as exc:  # pragma: no cover - network failure
-                        logger.exception("Failed to rename channel %s: %s", channel_id, exc)
+                    self._schedule_channel_rename(channel, channel_id, target_name)
         except Exception as exc:  # pragma: no cover
             logger.exception("Error updating F1 channels: %s", exc)
+
+    def _schedule_channel_rename(
+        self,
+        channel: discord_abc.GuildChannel,
+        channel_id: int,
+        target_name: str,
+    ) -> None:
+        if channel_id in self._rename_tasks:
+            return
+
+        async def _runner() -> None:
+            try:
+                await channel.edit(name=target_name, reason="F1 next session update")
+            except asyncio.CancelledError:  # pragma: no cover - cancellation during shutdown
+                raise
+            except Exception as exc:  # pragma: no cover - network failure
+                logger.exception("Failed to rename channel %s: %s", channel_id, exc)
+            finally:
+                self._rename_tasks.pop(channel_id, None)
+
+        task = self.bot.loop.create_task(_runner())
+        self._rename_tasks[channel_id] = task
