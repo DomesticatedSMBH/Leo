@@ -8,7 +8,7 @@ from typing import Iterable, Optional
 
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import commands
 
 from ..betting import (
     MarketInfo,
@@ -32,6 +32,11 @@ from toto_f1_api import TotoF1Client, canonical_key
 logger = logging.getLogger(__name__)
 
 MAX_MARKETS_DISPLAYED = 10
+
+
+def _next_hour(at: datetime) -> datetime:
+    rounded = at.replace(minute=0, second=0, microsecond=0)
+    return rounded + timedelta(hours=1)
 
 
 def _split_market_name(name: str) -> tuple[Optional[str], str]:
@@ -92,6 +97,7 @@ class BettingCog(commands.Cog):
         self._last_cache_at: Optional[datetime] = None
         self._cache_ttl = timedelta(minutes=45)
         self._ready_task: asyncio.Task[None] | None = None
+        self._hourly_task: asyncio.Task[None] | None = None
 
     async def cog_load(self) -> None:
         if not self.config.betting_channel_id:
@@ -105,25 +111,18 @@ class BettingCog(commands.Cog):
         if self._ready_task is not None:
             self._ready_task.cancel()
             self._ready_task = None
-        if self.hourly_update.is_running():
-            self.hourly_update.cancel()
+        if self._hourly_task is not None:
+            self._hourly_task.cancel()
+            self._hourly_task = None
         self._wallets.close()
         self._toto.close()
-
-    @tasks.loop(hours=1)
-    async def hourly_update(self) -> None:
-        await self.sync_betting_channel()
-
-    @hourly_update.error
-    async def hourly_update_error(self, exc: Exception) -> None:  # pragma: no cover - logging only
-        logger.exception("Hourly betting update failed: %s", exc)
 
     async def _initialise_after_ready(self) -> None:
         try:
             await self.bot.wait_until_ready()
             await self.sync_betting_channel()
-            if not self.hourly_update.is_running():
-                self.hourly_update.start()
+            if self._hourly_task is None or self._hourly_task.done():
+                self._hourly_task = asyncio.create_task(self._hourly_update_loop())
         except asyncio.CancelledError:  # pragma: no cover - cancellation during shutdown
             raise
         except Exception:  # pragma: no cover - logging only
@@ -132,6 +131,26 @@ class BettingCog(commands.Cog):
             current = asyncio.current_task()
             if self._ready_task is current:
                 self._ready_task = None
+
+    async def _hourly_update_loop(self) -> None:
+        while True:
+            try:
+                now = datetime.now(timezone.utc)
+                next_run = await run_in_thread(self._wallets.get_next_betting_sync)
+                if next_run is None or next_run <= now:
+                    next_run = _next_hour(now)
+                await run_in_thread(self._wallets.set_next_betting_sync, next_run)
+                delay = max(0.0, (next_run - now).total_seconds())
+                if delay:
+                    await asyncio.sleep(delay)
+                await self.sync_betting_channel()
+                upcoming = _next_hour(datetime.now(timezone.utc))
+                await run_in_thread(self._wallets.set_next_betting_sync, upcoming)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Hourly betting update failed")
+                await asyncio.sleep(60)
 
     async def sync_betting_channel(self) -> None:
         channel_id = self.config.betting_channel_id
