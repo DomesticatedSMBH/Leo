@@ -8,6 +8,7 @@ from discord.ext import commands
 from .config import BotConfig, build_config, build_intents
 from .f1 import initialise_cache
 from .scheduler import ScheduleManager
+from .cogs.betting import BettingCog
 from .cogs.f1_clock import F1ClockCog
 from .cogs.moderation import ModerationCog
 from .cogs.scheduler import ScheduleCog
@@ -26,6 +27,7 @@ class LeoBot(commands.Bot):
     async def setup_hook(self) -> None:
         await self.add_cog(ScheduleCog(self, self.config, self.schedule_manager))
         await self.add_cog(F1ClockCog(self, self.config))
+        await self.add_cog(BettingCog(self, self.config))
         await self.add_cog(ModerationCog(self, self.config))
         guild = discord.Object(id=self.config.guild_id)
         test_guild = discord.Object(id=self.config.test_guild_id)
