@@ -32,7 +32,7 @@ class F1ClockCog(commands.Cog):
     async def update_channels(self) -> None:
         try:
             event, session_code, session_dt = find_next_session(self.config.default_timezone)
-            if not event or not session_code or not session_dt:
+            if event is None or session_code is None or session_dt is None:
                 logger.info("No upcoming session found.")
                 return
             eventname, date_str, time_str, countdown_str = format_session_channel_strings(
