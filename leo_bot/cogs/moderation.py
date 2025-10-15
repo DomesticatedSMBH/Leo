@@ -21,6 +21,22 @@ class ModerationCog(commands.Cog):
         self._replacement_pattern = re.compile(
             rf"\bhttps://(www\.)?({escaped})\b", re.IGNORECASE
         )
+        self._report_message_menu = app_commands.ContextMenu(
+            name="Report Message", callback=self.report_message
+        )
+        self._forward_message_menu = app_commands.ContextMenu(
+            name="Forward Message to DMs", callback=self.forward_message
+        )
+        self.bot.tree.add_command(self._report_message_menu)
+        self.bot.tree.add_command(self._forward_message_menu)
+
+    def cog_unload(self) -> None:
+        self.bot.tree.remove_command(
+            self._report_message_menu.name, type=self._report_message_menu.type
+        )
+        self.bot.tree.remove_command(
+            self._forward_message_menu.name, type=self._forward_message_menu.type
+        )
 
     def _replace_domain(self, match: re.Match[str]) -> str:
         domain = match.group(2).lower()
@@ -101,7 +117,6 @@ class ModerationCog(commands.Cog):
         except discord.HTTPException:
             logger.exception("Failed to forward message via DM")
 
-    @app_commands.context_menu(name="Report Message")
     async def report_message(self, interaction: discord.Interaction, message: discord.Message) -> None:
         await interaction.response.send_message(
             f"This message by {message.author.mention} has been reported to our staff.",
@@ -126,7 +141,6 @@ class ModerationCog(commands.Cog):
         )
         await log_channel.send(embed=embed, view=view)
 
-    @app_commands.context_menu(name="Forward Message to DMs")
     async def forward_message(self, interaction: discord.Interaction, message: discord.Message) -> None:
         forwarded = False
         try:
