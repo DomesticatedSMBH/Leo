@@ -12,6 +12,7 @@ from .cogs.betting import BettingCog
 from .cogs.f1_clock import F1ClockCog
 from .cogs.moderation import ModerationCog
 from .cogs.scheduler import ScheduleCog
+from .cogs.shop import ShopCog
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class LeoBot(commands.Bot):
         await self.add_cog(ScheduleCog(self, self.config, self.schedule_manager))
         await self.add_cog(F1ClockCog(self, self.config))
         await self.add_cog(BettingCog(self, self.config))
+        await self.add_cog(ShopCog(self, self.config))
         await self.add_cog(ModerationCog(self, self.config))
         # Limit command registration to the configured guilds so that we only
         # sync once and avoid duplicate registrations.
